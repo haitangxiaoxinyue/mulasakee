@@ -1,0 +1,381 @@
+===== 第 1 页 =====
+Hello World 电控组步兵考核说明（骨架工程清单 · 全向
+轮）
+适用骨架：omni_skeleton（双板：底盘板 + 云台板）｜ 2026-10 ｜ 电控组
+欢迎加入 Hello World 电控组。这份文档就是你的考核任务书，动手前先通读一遍：
+一、考核概述 —— 我们要考核你什么、安全红线在哪里，务必先读；
+二、机器人与工程结构 —— 这台车和这份骨架长什么样，我们已经给你准备好了哪些代码；
+三、掏空物清单 —— 哪些代码被我们掏空了，要你亲手补上；
+四、任务清单 —— 建议你按依赖顺序完成的活，每一项都是验收项；
+五、验收标准 —— 我们怎么判分、做到什么程度拿什么等级；
+六、附录 —— 整车参数与关键文件索引，写代码时随时回来查。
+卡住了先查本文档，再带着你的排查过程来问老队员。上电调试前，重读一遍 1.3 安全红线。
+图 1：本队步兵机器人实车 —— 底盘 + 两轴云台双板架构，本次考核的目标就是把这台车的控制补完整
+
+===== 第 2 页 =====
+一、考核概述
+1.1 目标
+以全向轮步兵双板骨架（omni_skeleton）为底：底盘板与云台板各一片 STM32F407IGH6，经 CAN 互换信
+息。我们在骨架里已经给你备好组件库（遥控器 DBUS 解码、M3508 / 达妙 DM-J4310 电机驱动、CAN 滤波
+与发送、BMI088 + Mahony 姿态解算、离线检测工具等）与 CubeMX 底层（1ms 控制中断、IWDG 看门
+狗），但应用层三层（RobotModules / Task / Instance）全部掏空：没有模式、没有状态机、没有解算、
+没有闭环。
+你要在这份骨架上自己实现：底盘麦轮运动学逆解、云台两轴位置闭环、双板 CAN 通信协议、分离 / 跟随 /
+小陀螺三种底盘工作模式、PID 控制器、IMU 封装、任务调度与 IWDG 看门狗喂狗，使整车满足「前进正方
+向始终是云台朝向」的坐标系约定，通过功能演示 + GitHub 代码验收。
+1.2 范围
+项 内容
+底盘 4×M3508（麦轮）运动学逆解，速度 (vx, vy, w) 闭环下发
+云台 2×达妙 DM-J4310 两轴（yaw / pitch）位置闭环，yaw 支持连续旋转
+工作模式 分离（底盘与云台解耦）／跟随（底盘朝向跟随云台）／小陀螺（底盘绕心自旋、平移方向仍
+以云台为基准）
+坐标约定 前进正方向始终为云台朝向：平移速度指令一律定义在云台坐标系
+板间通信 底盘板 ⇄  云台板 CAN 帧协议（字段、编码、在线判断由你设计）
+调试保障 遥控器急停、失控保护（离线归零）、IWDG 看门狗
+裁判系统、超电、发射机构（摩擦轮/拨弹）、视觉（NUC）、键鼠控制、LED 灯效等均不属于本次考
+核，骨架中也未包含，请勿在这些方向上花时间。
+1.3 安全红线（先读，违反直接不通过）
+⚠  本次考核的第一要求：绝不允许任何电机失控持续转动，所有电机动作必须由遥控器指令驱动。车上
+有高速旋转的云台和大扭矩底盘电机，失控=伤人伤车。
+红线 说明
+禁止电机
+持续转动
+不允许上电自转、开环常转、空载常转「测试」，以及任何「没有遥控器指令却一直在动」的
+情况；云台到位必须保持，底盘速度必须为零输入即零输出。
+必须由遥控器控制 只有收到有效 DBUS 遥控数据（DT7 解码成功、未离线），且处于对应档位/模式时，才允许
+电机输出。
+
+===== 第 3 页 =====
+失效即归零 急停档位、遥控器离线 / 数据长时间未更新、生命状态未进入 Working 时，所有电机必须立
+刻输出归零（setInput(0)）。
+禁止无约束代码 不允许写无条件循环转动、常值/递增电流等不受遥控器约束的代码；小陀螺模式也必须有明
+确的进入/退出档位与速度上限。
+演示 / 验收时，一旦发现电机不受遥控器控制或失控持续转动，直接判定不通过。
+1.4 提供边界（核心）
+我们提供：DBUS 解码（DT7）+ 电机驱动（M3508 / DM-J4310，纯字节收发接口）+ CAN 滤波器/发送与
+接收中断框架 + BMI088 / Mahony + 离线检测工具 + 双板通信类框架 + CubeMX 底层（TIM6 1ms 中断、
+IWDG 已初始化）+ 工程骨架。我们不提供：模式枚举与共享类型、状态机、运动学逆解、云台位置环、PID
+类、IMU 封装、双板协议字段与编解码、CAN 接收分发、任务调度、喂狗逻辑，全部由你自己写。
+维度 我们提供 你要写
+CAN 通信 CanFilter_Init / CAN_Send_Msg；接收
+回调中「取 8 字节 + 重新使能」已写好
+接收回调里按 StdId 分发路由；双板帧收发
+电机 M3508 / DM-J4310 驱动类
+（encode/decode、单位接口、工厂 Create
+Motor）
+电机 ID / 方向 / 角度偏移配置；实例化接线
+遥控器 DT7 解码类（18 字节 DBUS → 摇杆 / 拨杆 /
+拨轮）
+UART 空闲 + DMA 收 18 字节接线
+IMU BMI088 芯片驱动 + Mahony 姿态解算 Imu 封装类（零漂计算 + 姿态角输出）
+双板通信 GimbalChassisComm 类框架（构造函数、收
+发方向枚举、离线判断签名）
+报文字段设计、encode/decode/isOffline 实现、
+CAN ID 选定
+状态机 ——（不提供基类，与飞镖考核不同） Dead → Resurrection → Working 三态及迁移
+控制 —— PID 类、麦轮逆解、两轴位置环、三模式逻辑、前进
+方向变换
+调度 main.c 已启动 TIM6 1ms 中断 MainTaskInit / MainTask / CommTaskInit / C
+ommTask、HAL 回调分发
+看门狗 IWDG 已初始化（见 6.2 超时参数） 喂狗策略与失效保护
+1.5 验收形式
+功能演示（主要）+ 代码上传 GitHub 验收（参考 2026 考核）。
+DDL 与分组规则由组长另行通知。
+
+===== 第 4 页 =====
+二、机器人与工程结构
+2.0 双板架构与目录布局
+整车由两块 STM32F407IGH6 板组成：底盘板（4×M3508 麦轮、底盘 IMU）与云台板（yaw / pitch 两片
+达妙 DM-J4310、云台 IMU、遥控器接收）。两板各自运行一份独立固件，只能通过 GimbalChassisComm 的
+CAN 帧交换信息，严禁跨板调用函数或共享变量。两板共享的协议类型统一放 RobotComponents，随两板同
+时编译。
+omni_skeleton/
+├─ Chassis/                          底盘板工程（产物  omni_chassis.elf ）
+│  ├─ Core/                          CubeMX 生成（ main.c / can.c / iwdg.c / tim.c / usart.c / spi.c
+/ dma.c / gpio.c ）
+│  ├─ Drivers/                       STM32F4 HAL + CMSIS
+│  ├─ inc/ + src/          ★  提供的组件库（ DT7 / motor_M3508 / motor_DaMiao / HW_can /
+│  │                                    BMI088 / mahony / offline_checker / tick / imu.hpp( 掏空 )
+等）
+│  ├─ Instance/component/            实例化  getter （掏空， TODO ）
+│  ├─ RobotModules/component/        chassis / robot （掏空， TODO ）
+│  ├─ Task/component/                main_task / comm_task （掏空， TODO ）
+│  └─ third_party/                   CMSIS-DSP / Eigen3 / SEGGER
+├─ Gimbal/                           云台板工程（产物  omni_gimbal.elf ，结构与底盘板同构；
+│                                    RobotModules 里是  gimbal / robot ， Instance 无  iksolver ）
+└─ RobotComponents/component/        双板共享（两板同时编译）
+├─ gimbal_chassis_comm.{hpp,cpp}  ★  双板通信类框架（字段与  encode/decode 掏空）
+└─ module_state.hpp               共享枚举  / 运动结构（整体  TODO ）
+你不需要动 CMakeLists.txt：inc/ 放头文件、src/ 放 .cpp 会被自动编译； Instance/、 RobotMod
+ules/、 Task/、 RobotComponents/ 下新增的 .c* 也会被自动收集。若自建新目录，把目录名加进 CM
+akeLists.txt 的 set(user_folders ...) 即可。
+2.1 组件库清单（已提供）
+文件 内容
+inc/DT7.hpp + src/DT7.cp
+p（两板各一份，两板都编译）
+DT7 遥控器：18 字节 DBUS 解码 → rc_lv/lh/rv/rh（左右摇杆竖/平，
+[-1,1]）、rc_wheel（拨轮 [-1,1]）、rc_l_switch / rc_r_switch（Up=1 /
+Mid=3 / Down=2）、鼠标 + 键盘 16 键。USART3、100 kbps、9 位含偶校验、
+只收；接口只做 decode。
+inc/motor_M3508.hpp + sr
+c/…
+M3508（C620 电调）：ID 1~8；发送 ID 1~4 → 0x200、5~8 → 0x1FF；反
+馈 ID = 0x200 + id。输入类型 kRaw / kTorq / kCurr，暴露纯字节
+encode/decode 接口，CAN 层按反馈 ID 判归属后调 decode。
+inc/motor_DaMiao.hpp + sr
+c/…
+达妙 DM-J4310（云台 yaw / pitch 均为该电机）：MIT 模式发送 ID = 电机 ID 本
+身、反馈 ID 恒为 id + 0x10；setMitInput(pos, vel, kp, kd, torq)
+（kp≤500、kd≤5，位置控制 kd 不能为 0）；上电失能、auto_enable 自动使能；
+内部不做过零处理，不支持多圈累计（见 3.5）。
+
+===== 第 5 页 =====
+inc/motor.hpp + inc/motor
+_base.hpp
+工厂 CreateMotor(MotorType, id, opt)（kM2006 / kM3508 /
+kDM_J4310）与 OptionalParams（方向 / 减速比 / 角度偏移 / 限幅），angle()
+/ vel() / torq() / curr() 访问器。
+inc/HW_can.hpp + src/HW_c
+an.cpp
+CanFilter_Init(&hcan)（全收掩码，CAN1→FIFO0、CAN2→FIFO1）与 CAN
+_Send_Msg 已实现；两个 RxFifo 接收回调中「取帧 + 重新使能中断」已写好，按
+StdId 分发是 TODO。
+inc/BMI088.hpp + src/BMI0
+88.cpp；inc/mahony.hpp +
+src/mahony.cpp
+BMI088（SPI）输出加速度 / 角速度 / 温度； Ahrs 基类 update(acc, gyro)
+→ 欧拉角（Z-Y-X，rad，相对起始姿态），坐标系 x 前 y 左 z 上。
+inc/imu.hpp 掏空：你要基于 BMI088 + Mahony 实现 Imu 封装类（见 3.4）。
+inc/offline_checker.hpp 离线检测（header-only）：默认阈值 100ms，初始即离线；骨架中没有任何文件
+引用它，留给你挂到电机 / 遥控器 / 双板通讯上。
+inc/tick.hpp、inc/base.hp
+p、inc/assert.hpp、inc/s
+ystem.hpp、inc/crc8.hpp
+等基础工具
+时间基准 GetTickMs/GetTickUs、Bound / IsInRange、调试断言、临界区、
+CRC 等基础工具。
+2.2 CubeMX 底层现状（两板相同，除非另注）
+项 配置
+控制周期 TIM6 已按 1ms 周期启动中断（ HAL_TIM_Base_Start_IT(&htim6) 在 main.c
+中）； HAL_TIM_PeriodElapsedCallback 分发是你的任务（见 3.6）
+遥控器串口 USART3，100000 baud，9 位数据含偶校验（DBUS）
+CAN CAN1 + CAN2 均已初始化（电机 / 双板通信用哪路 CAN 由实机接线决定）
+IWDG 看门狗 已初始化并启动计数：底盘板 Prescaler 32 / Reload 300 → 约 300ms 超时；云台板
+32 / 600 → 约 600ms 超时。全工程目前没有任何喂狗代码（见下方蓝色提示）
+⚠  注意：骨架上电后若不喂狗，板子会在超时时间后复位并无限循环（底盘板约 0.3s 一轮、云台板约
+0.6s 一轮）。这是预期行为，不是板子坏了——请尽快在 CommTask 中实现喂狗，并思考「喂狗应该放在
+什么条件之后」（见 4.10）。
+2.3 电机协议速查
+M3508（C620 电调，底盘 4 轮）：控制帧 0x200（ID 1~4）/ 0x1FF（ID 5~8），每帧 4 台电机 × int16
+大端；反馈帧 ID = 0x200 + id。
+参数 M3508（C620）
+报文输入范围 ±16384
+最大电流 20 A
+
+===== 第 6 页 =====
+减速比 3591 / 187 ≈ 19.2
+角度分辨率 2π / 8191 rad（反馈 0~8191 对应 0~360°）
+转速分辨率 2π / 60 rad/s（反馈单位 rpm）
+电流分辨率 20 / 16384 A
+达妙 DM-J4310（云台 yaw / pitch）：MIT 模式，发送 ID = 电机 ID，反馈 ID = 电机 ID + 0x10。上位机
+（调试器）需配置 CAN ID = ID、Master ID = ID + 0x10、PMAX = 3.141593（VMAX 21 / TMAX 7.5）。
+上电失能，不发指令不反馈；使能可用 auto_enable。
+图 2：M3508 动力套与全向轮（RoboMaster 官方图）—— 底盘 4 轮均为麦轮（滚子斜向 45°），逆解时必须计入滚子角
+三、掏空物清单（这些都要你自己写）
+3.1 共享类型与模式定义（ RobotComponents/component/module_state.hpp）
+本文件被两板同时编译，只能放纯类型 / 枚举 / 内联函数，严禁依赖任何具体硬件。需定义：
+
+===== 第 7 页 =====
+生命状态枚举：至少区分「上电未就绪 Dead / 恢复自检 Resurrection / 正常工作 Working」；
+手动控制源枚举（本次仅遥控器，预留扩展）；
+底盘工作模式枚举：分离 / 跟随 / 小陀螺；云台工作模式枚举（关节空间控制 yaw、pitch）；
+底盘运动状态结构（vx、vy、w）与云台运动状态结构（yaw、pitch），单位自定并全工程一致，给出加
+减、数乘等运算。
+模式 行为定义（验收按此执行）
+分离 底盘与云台解耦：底盘速度 (vx, vy, w) 全部来自遥控器直接映射，底盘不自动回正、不自旋；云台独
+立闭环。
+跟随 底盘朝向自动跟随云台朝向：w 由「云台朝向 − 底盘朝向」的闭环给出（建议 PID），使车头始终对
+准云台指向；平移 (vx, vy) 来自摇杆（云台系）。
+小陀螺 底盘绕自身几何中心持续自旋（w 为可控常值，建议由拨轮设定并限幅），平移 (vx, vy) 仍然有效且
+始终以云台朝向为基准（见 3.2）；云台靠自身闭环保持指向。
+3.2 坐标系硬性约定：前进正方向始终是云台朝向
+⚠  所有平移速度指令 (vx, vy) 一律定义在云台坐标系：x 轴 = 云台朝向（枪管方向）、y 轴 = 云台左
+方。vx > 0 就是「操作手面对的方向」，无论车头朝哪。底盘解算前必须先旋转到车体坐标系。
+设 δ = 云台朝向 − 车头朝向（云台相对底盘的偏航角），则底盘系平移速度为：
+vx_chassis =  vx_gimbal · cos δ + vy_gimbal · sin δ
+vy_chassis = −vx_gimbal · sin δ + vy_gimbal · cos δ
+δ 的来源：云台 yaw 关节角（DM-J4310 反馈，经 G2C 帧发给底盘）+ 底盘 IMU yaw 的组合，或「云
+台板 IMU 绝对 yaw − 底盘板 IMU 绝对 yaw」，两种思路均可，两板必须约定一致；
+推导旋转矩阵时注意坐标轴定义与角度正方向（IMU z 轴向上、右手法则），先在纸上画图再写代码；符
+号以实车调试为准；
+小陀螺模式下该变换每 1ms 用最新 δ 计算，即可实现「车在转、平移方向不变」；如需更平滑可叠加底
+盘角速度前馈（加分项）；
+角度回绕：δ 参与三角函数前先归一化到 [−π, π]，避免 359° → 1° 反向大转（见 3.5）。
+3.3 双板通信（ RobotComponents/component/gimbal_chassis_comm.{hpp,cpp}）
+类框架已提供（ CodePart::Chassis / Gimbal 决定 encode/decode 方向、构造函数已实现、 chassis_data
+() / gimbal_data() 访问器已提供），需要你完成：
+字段设计： ChassisData（C2G：底盘在线/就绪、当前工作模式、期望的云台 yaw/pitch 目标等）、 Gim
+balData（G2C：云台在线/就绪、当前模式、实际 yaw/pitch 角度反馈等）——按 3.2 的需要自行增删；
+共享枚举引 module_state.hpp；
+encode / decode：8 字节定长，浮点量按约定比例缩放成整数（避免丢位），收发两端比例必须一致、
+严格对称；建议先写自测——同一结构 encode 后再 decode 应能还原原值；
+
+===== 第 8 页 =====
+isOffline：用 GetTickMs() 与 last_rx_tick_ 差值判断，阈值自定义（建议 100ms 量级）；
+CAN ID 选定：从 0x200 之后的空闲标准帧 ID 里选一对（建议 0x210 = C2G、 0x211 = G2C），两板
+协 商 一 致 ； 必 须 避 开 电 机 帧 （ M3508 控 制  0x200/0x1FF 、 反 馈  0x201~0x208；DM-J4310 发 送
+0x01~0x0F、反馈 0x11~0x1F）。
+3.4 PID 类 与 Imu 封装
+模块 要求
+PID 控制器 自己实现一个 PID 类（位置式或增量式），含 Kp/Ki/Kd、积分限幅、输出限幅；建议单独新建文
+件，放 hello_world::pid 命名空间（ Instance/component/ins_pid.cpp 的 TODO 已给出
+建议接口）。考核会检查各回路「稳、快、无超调」。
+Imu 封装
+（inc/imu.hp
+p）
+基于已提供的 BMI088 + Mahony：开机静止采样求角速度零漂 → 姿态收敛；对外输出 roll() /
+pitch() / yaw()（rad，相对开机姿态）。零漂未收敛前状态机不得进入 Working。若需 .cpp 可自
+行在 src/ 下新增（CMake 已递归收集）。
+3.5 底盘模块 与 云台模块（ RobotModules/component/）
+模块 要求
+底盘
+chassis.{hpp,c
+pp}
+设计 robot::Chassis 类：把底盘速度指令 (vx, vy, w) 经麦轮运动学逆解（注意 45° 滚子角）得
+到 4 个轮的目标轮速，再换算为电机控制量；对解算结果限幅避免超速。几何参数（轮半径、轮
+距、轴距、轮位坐标）见 6.2（实机为准）。逆解结果经电机组件 encode() 下发，注意输入量类型
+（kRaw 电流码盘值）。
+云台
+gimbal.{hpp,cp
+p}
+设计 robot::Gimbal 类：yaw / pitch 两关节的位置环（角度差 → PID → 转矩/电流，经 MIT
+接口下发）。pitch 加软件限位钳位防堵转；yaw 必须处理 360° 连续旋转：角度差归一化到 [−π,
+π]（DM-J4310 内部不做多圈累计，359°→1° 必须当成 +2° 而不是 −358°）。位置环 PID 用自己
+写的类。
+状态机
+robot.{hpp,cp
+p}（两板）
+设计 robot::Robot 类作为每控制周期（1ms）入口：按「更新数据 → 状态机迁移 → 生成指令
+→ 下发」组织 update()。三态迁移（上电未就绪 / 恢复自检 / 正常工作）：Dead 输出全零；
+Resurrection 完成自检复位（电机使能、IMU 零漂收敛）；急停判断放最外层（遥控器急停位 →
+所有电机指令立即归零，硬性验收项）；状态切换时复位残留指令防电机突变。各模块
+（Chassis/Gimbal、Imu、电机、双板通讯）通过注册接口挂到 Robot 上。
+3.6 通信接线 与 任务调度
+位置 要求
+CAN 接收分发
+（src/HW_can.cpp）
+两个 RxFifo 回调（CAN1→FIFO0、CAN2→FIFO1）中：取 8 字节 + 重新使能已写好；按
+rx_header.StdId 路由——电机 GetRxId() 命中 → 电机 decode；双板帧 ID 命中
+→ GimbalChassisComm decode；未命中 → 丢弃。
+UART DBUS 接收
+（ Task/component/com
+m_task.cpp）
+CommTaskInit 中调 HAL_UARTEx_ReceiveToIdle_DMA 启动接收并记录缓冲区；实现
+HAL_UARTEx_RxEventCallback：收满 18 字节后调 DT7 的 decode() 解包并重新启动下
+一轮接收。回调是 C 链接，需 extern "C" 包裹。不要在这里写 CAN 接收逻辑。
+
+===== 第 9 页 =====
+初始化与周期入口
+（ Task/component/mai
+n_task.cpp）
+MainTaskInit：按依赖顺序拿 Instance 层对象完成一次性初始化（电机使能、IMU 零
+漂、CAN 滤波器），注册进 Robot，再调 CommTaskInit（UART 接收、IWDG）。在
+main.c 的 USER CODE 区 while(1) 之前调用 MainTaskInit()（云台板 main.c 已留提
+示；底盘板 main.c 需自行补调用，include 提示两板都有）。 MainTask：1ms 周期入
+口，只调 robot->update()，保持薄薄一层。
+定时器分发 实现 HAL_TIM_PeriodElapsedCallback：先判断中断来自 htim6，再调 MainTask()
++ CommTask()；同样需 extern "C"，否则中断里找不到符号。
+CommTask（1ms） 遍历电机：encode 得 8 字节 + tx_id， CAN_Send_Msg 发出（同帧多电机合并后一次发
+送）；双板通讯对象 encode 后发送；刷新 IWDG（见 4.10）。
+Instance 层 getter ins_motor / ins_imu / ins_pid / ins_comm / ins_robot / ins_chassis_gimb
+al_comm / ins_chassis_iksolver 全部为「返回 nullptr + TODO」：静态定义对象并
+返回地址。电机 ID / 方向 / 角度偏移按实机接线配置（填 6.2 表）。
+四、你的任务清单（验收项，按依赖顺序）
+1. CAN 接收分发 + 电机配置（两板） —— HW_can.cpp 两个回调按 StdId 路由；ins_motor 配好电机 ID
+/ 方向 / 角度偏移，跑通「指令下发 + 反馈解析」。
+2. UART DBUS 接收（两板） —— 空闲 + DMA 收 18 字节，收满调 decode() 解出 rc 字段并重启接收。
+3. PID 控制器类 —— 位置式/增量式，Kp/Ki/Kd、积分限幅、输出限幅，参数化可复用。
+4. Imu 封装类 —— BMI088 + Mahony 组合，零漂计算与收敛判定，输出 roll/pitch/yaw；零漂未收敛不
+得进 Working。
+5. module_state 共享类型 —— 生命状态、控制源、底盘三模式、云台模式枚举与运动结构（两板一
+致）。
+6. 底盘运动学逆解 + 前进方向变换 —— 麦轮逆解矩阵 + 云台系 → 底盘系旋转（3.2） + 限幅；考核员会
+现场转动云台验证「前进正方向始终是云台朝向」。
+7. 云台两轴位置环 —— yaw 连续旋转回绕、pitch 软件限位，两轴闭环稳定无震荡。
+8. 双板通信协议 —— ChassisData/GimbalData 字段、encode/decode 对称自测、isOffline、CAN ID 选
+定；拔掉任一板 CAN 线，另一板能正确进入保护。
+9. 状 态 机  + 任 务 调 度  —— Dead/Resurrection/Working 三 态 、 急 停 最 外 层 ；
+MainTaskInit/MainTask/CommTask 挂上 htim6 1ms 中断（extern "C" 回调）。
+10. IWDG 看门狗（硬性验收项） —— 在 CommTask 周期刷新；验收时临时屏蔽喂狗调用（或制造任务卡
+死），板子必须在超时时间内复位（底盘板约 0.3s / 云台板约 0.6s）。同时演示：急停档 → 所有电机归
+零；关遥控器 → 离线保护归零，恢复遥控后可正常继续。
+⚠  以上全部任务都必须遵守 1.3 安全红线：电机不得失控持续转动、必须由遥控器控制、失效即归零；
+违反直接不通过。
+加分项：跟随模式变增益跟随（偏差大时快速回正、接近时减速防过冲）；小陀螺平移的角速度前馈补偿；双
+板互保（任一板离线，两板都进保护）；开机自检指示（LED / 蜂鸣）；PID 整定记录文档；上位机 / 调试接
+
+===== 第 10 页 =====
+口辅助调参。
+五、验收标准
+等级 要求
+通过 完成 1~10 全部基础项：双板通信正常，分离 / 跟随 / 小陀螺三模式可切换且行为符合 3.1 定义；现场验
+证前进正方向始终为云台朝向（转动云台后推杆，车朝云台指向前进）；云台两轴闭环稳定；急停归零、
+离线归零；看门狗复位演示成功。
+良好 通过基础上：模块封装清晰（电机/PID/Imu/模块各自成类）、代码规范、Git 提交历史合理；模式切换平
+顺无突跳；各 PID 回路稳、快、无超调。
+优秀 完成加分项之一及以上，并能讲清设计取舍。
+⚠  一票否决项：出现电机失控持续转动、电机不受遥控器控制、急停/遥控器离线不归零、任务卡死看门
+狗不复位（谎称已实现）、抄袭，直接判定不通过。
+六、附录：关键文件索引与机器人信息
+6.1 关键文件索引
+先读： RobotComponents/component/module_state.hpp（共享类型，从这里开始）、 RobotComponents/co
+mponent/gimbal_chassis_comm.hpp（双板协议）、两板 RobotModules/component/robot.hpp（你的任务
+总纲）。
+要写的文件：两板 RobotModules/component/{chassis,gimbal,robot}.{hpp,cpp}、 Task/component/{mai
+n_task,comm_task}.{hpp,cpp}、 Instance/component/*.cpp、src/HW_can.cpp（分发）、inc/imu.hp
+p（+ 自建 pid 文件）。
+参考接口（勿改）：inc/DT7.hpp、inc/motor_M3508.hpp、inc/motor_DaMiao.hpp、inc/motor.hp
+p、inc/HW_can.hpp、inc/offline_checker.hpp、inc/BMI088.hpp、inc/mahony.hpp、inc/tick.hp
+p。
+底层（CubeMX 生成，不要手改）： Core/Src/{main,can,iwdg,tim,usart,spi,dma,gpio}.c；USER
+CODE 区内可加代码。
+6.2 机器人信息（全向轮步兵）
+主控与外设
+项 配置
+MCU STM32F407IGH6 ×2（底盘板 / 云台板），C++20，控制周期 1ms（TIM6，两板相同）
+CAN CAN1 + CAN2；电机与双板通信的 ID 分配见下表（双板帧建议 0x210/0x211）
+DBUS（DT7） USART3，100 kbps，9bit 含偶校验，18 字节，只收；空闲 + DMA 接收
+
+===== 第 11 页 =====
+IMU BMI088（SPI1），两板各一片；Mahony 姿态解算
+IWDG 底盘板：预分频 32、重装 300 → 约 300ms；云台板：32、600 → 约 600ms
+电机配置
+电机 数量 类型 CAN 反馈 ID CAN 控制 ID 方向 / 偏移 说明
+底盘左前 LF 1 M3508 0x200 + id 0x200 / 0x1FF 麦轮
+底盘左后 LB 1 M3508 0x200 + id 0x200 / 0x1FF 麦轮
+底盘右后 RB 1 M3508 0x200 + id 0x200 / 0x1FF 麦轮
+底盘右前 RF 1 M3508 0x200 + id 0x200 / 0x1FF 麦轮
+云台 yaw 1 DM-J4310 id + 0x10 id 支持连续旋转
+云台 pitch 1 DM-J4310 id + 0x10 id 软件限位
+底盘几何参数
+参数 数值
+轮半径 R（m）
+半轮距 L/2（m）
+半轴距 W/2（m）
+麦轮滚子角 45°（标准值）
+安全总则
+禁止任何电机失控持续转动；所有电机动作必须由遥控器控制（有效 DBUS 数据 + 对应档位）；
+急停档 / 遥控器离线 / 未进 Working：一律 setInput(0) 归零；
+上电调试时车轮必须离地；首次整机测试前先单板单电机验证方向；
+小陀螺必须限速、有明确进出档位；禁止把无约束自转写死在初始化里。
+（ID / 方向以实机接线为准，已按实机配置统一补齐）
+（逆解用，以实机测量为准，已按实机配置统一补齐）
+反向 / 0
+反向 / 0
+反向 / 0
+反向 / 0
+正向 / -1.36920
+反向 / 0.02480
+0.07786
+0.15338
+0.15338

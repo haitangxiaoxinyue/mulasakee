@@ -1,0 +1,25 @@
+# ---- 编译产物（体积大，且随时能重新生成，不进仓库）----
+build/
+Debug/
+Release/
+*.elf
+*.hex
+*.bin
+*.map
+*.o
+*.d
+*.obj
+
+# ---- 编辑器 / IDE ----
+.vscode/
+.idea/
+*.code-workspace
+
+# ---- Python ----
+__pycache__/
+*.pyc
+
+# ---- 系统文件 ----
+Thumbs.db
+desktop.ini
+.DS_Store
